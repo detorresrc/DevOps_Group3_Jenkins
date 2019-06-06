@@ -43,8 +43,9 @@ pipeline{
             steps {
                 withCredentials([string(credentialsId: 'ARTIFACTORY_USERNAME', variable: 'ARTIFACTORY_USERNAME'), string(credentialsId: 'ARTIFACTORY_PASSWORD', variable: 'ARTIFACTORY_PASSWORD')]) {
                     sh '''
-                        tar -cj dist/* > artifact.$BUILD_NUMBER.tar.bz2
-                        curl -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD -T artifact.$BUILD_NUMBER.tar.bz2 "https://jfrog.ibm-kapamilya-devops.com/artifactory/generic-local/artifact.$BUILD_NUMBER.tar.bz2"
+                        ARTIFACT_NAME=artifact.group3.$BUILD_NUMBER.tar.bz2
+                        tar -cj dist/* > $ARTIFACT_NAME
+                        curl -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD -T $ARTIFACT_NAME "https://jfrog.ibm-kapamilya-devops.com/artifactory/generic-local/$ARTIFACT_NAME"
                     '''
                 }
             }
