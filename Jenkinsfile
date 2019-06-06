@@ -29,11 +29,7 @@ pipeline{
                         sh '/usr/local/bin/sonar-scanner -Dsonar.login=$SONARQUBE_APIKEY -Dsonar.projectVersion=$BUILD_NUMBER'
                     }
                 }
-            }
-        }
-        stage("Quality Gate") {
-            steps {
-                timeout(time: 1, unit: 'MINUTES') {
+                timeout(time: 2, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 } 
             }
@@ -45,8 +41,12 @@ pipeline{
         }
         stage('Upload') {
             steps {
-                sh 'tar -cj dist/* > artifact.$BUILD_NUMBER.tar.bz2'
-                sh 'cp artifact.$BUILD_NUMBER.tar.bz2 /var/lib/jenkins/files/artifact.$BUILD_NUMBER.tar.bz2'
+                withCredentials([string(credentialsId: 'ARTIFACTORY_USERNAME', variable: 'ARTIFACTORY_USERNAME'), string(credentialsId: 'ARTIFACTORY_PASSWORD', variable: 'ARTIFACTORY_PASSWORD')]) {
+                    sh '''
+                        tar -cj dist/* > artifact.$BUILD_NUMBER.tar.bz2
+                        curl -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD -T artifact.$BUILD_NUMBER.tar.bz2 "https://jfrog.ibm-kapamilya-devops.com/artifactory/generic-local/artifact.$BUILD_NUMBER.tar.bz2"
+                    '''
+                }
             }
         }
     }
