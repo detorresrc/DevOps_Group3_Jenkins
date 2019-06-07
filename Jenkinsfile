@@ -9,7 +9,7 @@ pipeline{
     agent any
 
     parameters {
-        string(defaultValue: "develop", description: 'Branch Specifier', name: 'GIT_SPECIFIER'),
+        string(defaultValue: "develop", description: 'Branch Specifier', name: 'GIT_SPECIFIER')
         string(defaultValue: "https://github.com/detorresrc/devops-angular7", description: 'GIT URL', name: 'GIT_URL')
     }
 
