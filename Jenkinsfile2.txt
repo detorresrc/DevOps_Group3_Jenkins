@@ -10,14 +10,13 @@ Reference
     * https://www.avioconsulting.com/blog/using-role-based-authorization-strategy-jenkins
 */
 
-def USER_INPUT_DEYPLOY_TO_STAGING
-
 pipeline{
-    agent any
+    agent {
+        label 'slave01'
+    }
 
     options {
         timestamps()
-        //timeout time:10, unit:'MINUTES'
     }
 
     parameters {
@@ -26,40 +25,25 @@ pipeline{
     }
 
     stages {
-        stage("Initialize") {
-            steps {
-                script {
-                    notifyBuild('STARTED')
-                    echo "${BUILD_NUMBER} - ${env.BUILD_ID} on ${env.JENKINS_URL}"
-                    sh 'rm -rf dist/'
-                }
-            }
-        }
         stage('Source') {
             steps {
                 git branch: "${params.GIT_SPECIFIER}", url: "${params.GIT_URL}"
-            }
-        }
-        stage('Install Dependencies') {
-            steps {
                 sh 'npm install'
-            }
-        }
-        stage('Test - Run the linter (tslint)') {
-            steps {
-                sh 'npm run lint'
             }
         }
         stage('Sonarqube Analysis') {
             steps {
+                script {
+                    scannerHome = tool 'SONARQUBE_SCANNER'
+                }
                 withCredentials([string(credentialsId: 'SONARQUBE_APIKEY', variable: 'SONARQUBE_APIKEY')]) {
-                    withSonarQubeEnv('SonarqubeServer_GROUP3') {
-                        sh '/usr/local/bin/sonar-scanner -Dsonar.login=$SONARQUBE_APIKEY -Dsonar.projectVersion=$BUILD_NUMBER'
+                    withSonarQubeEnv('SONARQUBE_SERVER') {
+                        sh "${scannerHome}/bin/sonar-scanner -Dsonar.login=$SONARQUBE_APIKEY -Dsonar.projectVersion=$BUILD_NUMBER"
                     }
                 }
                 timeout(time: 2, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                } 
+                    waitForQualityGate abortPipeline: true, credentialsId: 'SONARQUBE_APIKEY'
+                }
             }
         }
         stage('Build') {
@@ -73,26 +57,9 @@ pipeline{
                     sh '''
                         ARTIFACT_NAME=artifact.group3.$BUILD_NUMBER.tar.bz2
                         tar -cj dist/* > $ARTIFACT_NAME
-                        curl -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD -T $ARTIFACT_NAME "https://jfrog.ibm-kapamilya-devops.com/artifactory/generic-local/$ARTIFACT_NAME"
+                        curl -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD -T $ARTIFACT_NAME "https://jfrog-v2.ibm-kapamilya-devops.com/artifactory/generic-local/$ARTIFACT_NAME"
                     '''
                 }
-            }
-        }
-        stage('Deploy - Staging') {
-            steps {
-/*
-                script {
-                    timeout(time: 7, unit: 'DAYS') {
-                        userInputDeployToStaging = input(
-                            id: 'USER_INPUT_DEYPLOY_TO_STAGING',
-                            message: 'Deploy to staging server?', 
-                            submitter: 'abscbncorpdevelopment',
-                            parameters: [
-                            ]
-                        )
-                    }
-                }
-*/
             }
         }
     }

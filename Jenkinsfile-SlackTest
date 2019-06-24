@@ -1,0 +1,70 @@
+#!groovy
+pipeline{
+    agent any
+
+    parameters {
+        string(defaultValue: "", description: 'Parent Build Number', name: 'PARENT_BUILD_NUMBER')
+    }
+
+    options {
+        timestamps()
+    }
+
+    stages {
+        stage("Initialize") {
+            steps {
+                script(){
+                    if(params.getOrDefault("PARENT_BUILD_NUMBER", "")=="") {
+                        currentBuild.result = 'FAILURE'
+                        throw new hudson.AbortException('PARENT_BUILD_NUMBER is required!')
+                    }
+                }
+
+                echo "Initialize Stage";
+                echo "Parent Build Number : ${PARENT_BUILD_NUMBER}";
+
+                script(){
+                    wrap([$class: 'BuildUser']) {
+                        try{
+                            echo "User : ${BUILD_USER}";
+                            echo "User Email : ${BUILD_USER_EMAIL }";
+                        }catch(e){
+                            echo "User not in scope, probably triggered from another job";
+                        }
+                    }
+                }
+            }
+        }
+        stage("SCM") {
+            steps {
+                slackSend channel: 'jenkins', color: '#439FE0', failOnError: true, message: 'SCM Started', teamDomain: 'ibmkapamilyad-tfj8971', tokenCredentialId: 'GROUP3_SLACK_APIKEY'
+                echo "SCM ..."
+            }
+        }
+    }
+
+    post {
+        /*
+            * These steps will run at the end of the pipeline based on the condition.
+            * Post conditions run in order regardless of their place in pipeline
+            * 1. always - always run
+            * 2. changed - run if something changed from last run
+            * 3. aborted, success, unstable or failure - depending on status
+            */
+        always {
+            echo "I AM ALWAYS first"
+        }
+        aborted {
+            echo "BUILD ABORTED"
+        }
+        success {
+            echo "BUILD SUCCESS"
+        }
+        unstable {
+            echo "BUILD UNSTABLE"
+        }
+        failure {
+            echo "BUILD FAILURE"
+        }
+    }
+}
