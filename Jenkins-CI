@@ -2,12 +2,6 @@
 /**
 IBM KAPAMILYA
 GROUP 3
-
-DECLARATIVE PIPELINE
-
-Reference
-    * https://github.com/maxyermayank/jenkins-pipeline-demo-pwa/blob/develop/Jenkinsfile
-    * https://www.avioconsulting.com/blog/using-role-based-authorization-strategy-jenkins
 */
 
 pipeline{
@@ -22,13 +16,20 @@ pipeline{
     parameters {
         string(defaultValue: "develop", description: 'Branch Specifier', name: 'GIT_SPECIFIER')
         string(defaultValue: "https://github.com/detorresrc/devops-angular7", description: 'GIT URL', name: 'GIT_URL')
+        string(name: 'BUILD_APPROVER_EMAIL', defaultValue: 'detorresrc@gmail.com', description: 'Build Approver Email')
+        string(name: 'BUILD_APPROVER_NAME', defaultValue: 'Rommel de Torres', description: 'Build Approver Name')
     }
 
     stages {
         stage('Source') {
             steps {
+                notifyBuild('STARTED')
                 git branch: "${params.GIT_SPECIFIER}", url: "${params.GIT_URL}"
-                sh 'npm install'
+
+                sh '''
+                rm -Rf dist/
+                npm install
+                '''
             }
         }
         stage('Sonarqube Analysis') {
@@ -56,24 +57,48 @@ pipeline{
                 withCredentials([string(credentialsId: 'ARTIFACTORY_USERNAME', variable: 'ARTIFACTORY_USERNAME'), string(credentialsId: 'ARTIFACTORY_PASSWORD', variable: 'ARTIFACTORY_PASSWORD')]) {
                     sh '''
                         ARTIFACT_NAME=artifact.group3.$BUILD_NUMBER.tar.bz2
+                        cp -fr Dockerfile config dist/
                         tar -cj dist/* > $ARTIFACT_NAME
-                        curl -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD -T $ARTIFACT_NAME "https://jfrog-v2.ibm-kapamilya-devops.com/artifactory/generic-local/$ARTIFACT_NAME"
+                        curl -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD -T $ARTIFACT_NAME "https://jfrog-v2.ibm-kapamilya-devops.com/artifactory/group3/$ARTIFACT_NAME"
                     '''
                 }
+            }
+        }
+        stage('Create Docker Image') {
+            steps {
+                withCredentials([string(credentialsId: 'DOCKER_USER', variable: 'DOCKER_USER'), string(credentialsId: 'DOCKER_PASS', variable: 'DOCKER_PASS')]) {
+                    sh '''
+                    cd dist
+                    docker login docker.io -u="${DOCKER_USER}" -p="${DOCKER_PASS}"
+                    docker build -t="devopsgroup3/angular7" .
+
+                    docker tag devopsgroup3/angular7 devopsgroup3/angular7:staging-$BUILD_NUMBER
+                    docker push devopsgroup3/angular7:staging-$BUILD_NUMBER
+
+                    docker tag devopsgroup3/angular7 devopsgroup3/angular7:production-$BUILD_NUMBER
+                    docker push devopsgroup3/angular7:production-$BUILD_NUMBER
+                    '''
+                }
+            }
+        }
+        stage('Kubernetes Deployment - Staging') {
+            steps {
+                sh '''
+                aws eks --region ap-southeast-1 update-kubeconfig --name group3
+                cd ${WORKSPACE}
+                cp dist/config/angular7-staging-deployment-service.yaml /tmp/deployment.yaml
+                sed -i "s/__VERSION__/staging-${BUILD_NUMBER}/" /tmp/deployment.yaml
+
+                kubectl apply -f /tmp/deployment.yaml
+
+                /usr/bin/aws cloudfront create-invalidation --distribution-id EI8EIEVCGFI7B --paths '/*'
+                '''
             }
         }
     }
 
     post {
-        /*
-            * These steps will run at the end of the pipeline based on the condition.
-            * Post conditions run in order regardless of their place in pipeline
-            * 1. always - always run
-            * 2. changed - run if something changed from last run
-            * 3. aborted, success, unstable or failure - depending on status
-            */
         always {
-            echo "I AM ALWAYS first"
             notifyBuild("${currentBuild.currentResult}")
         }
         aborted {
@@ -81,6 +106,7 @@ pipeline{
         }
         success {
             echo "BUILD SUCCESS"
+            sendProdApproval()
         }
         unstable {
             echo "BUILD UNSTABLE"
@@ -133,7 +159,8 @@ def notifyBuild(String buildStatus = 'STARTED') {
     def colorName = 'RED'
     def colorCode = '#FF0000'
     def subject = "${buildStatus}: '${env.JOB_NAME} [${env.BUILD_NUMBER}]'" + branchName + ", " + shortCommitHash
-    def summary = "Started: Name:: ${env.JOB_NAME} \n " +
+    def summary = "Status: ${buildStatus} \n " +
+            "Started: Name:: ${env.JOB_NAME} \n " +
             "Build Number: ${env.BUILD_NUMBER} \n " +
             "Build URL: ${env.BUILD_URL} \n " +
             "Short Commit Hash: " + shortCommitHash + " \n " +
@@ -153,5 +180,17 @@ def notifyBuild(String buildStatus = 'STARTED') {
         colorCode = '#FF0000'
     }
 
-    println "${summary}"
+    slackSend channel: 'jenkins', color: "${colorCode}", failOnError: true, message: "${summary}", teamDomain: 'ibmkapamilyad-tfj8971', tokenCredentialId: 'GROUP3_SLACK_APIKEY'
+}
+
+def sendProdApproval() {
+    def redirectTo = "https://jenkins-v2.ibm-kapamilya-devops.com/job/GROUP3/job/Angular7-CD/${env.BUILD_NUMBER}"
+    def build_url = "https://jenkins-v2.ibm-kapamilya-devops.com/job/GROUP3/job/Angular7-CD/buildWithParameters"
+    def build_token = "111cfe3797ebf5ca7c12d7f6ba04258408"
+
+    def form = "Hi ${BUILD_APPROVER_NAME}, <p>Job <strong>${env.JOB_NAME} | ${env.BUILD_NUMBER}</strong> is ready for deployment.</p>Awaiting for your approval, kindly click the button below to proceed and disregard this email if not so.<p></p><form method='post' action='${build_url}?token=${build_token}&PARENT_BUILD_NUMBER=${env.BUILD_NUMBER}'><input name='crumb' type='hidden' value='68f6099a9b8b4ac0194d03ac6cfae817'><input name='json' type='hidden' value=\"{'parameter': {'name': 'TRIGGERED_FROM_BUILD', 'runId': '${JOB_NAME}#${BUILD_NUMBER}'}, 'statusCode': '303', 'redirectTo': '${redirectTo}'}\" /><input name='Submit' type='submit' value='Deploy' class='submit-button primary' /></form>"
+    def this_subject = "[GROUP3 ANGULAR7] Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' - BUILD "
+    def this_body = form
+    
+    emailext mimeType: 'text/html', body: this_body, subject: this_subject, to: '${BUILD_APPROVER_EMAIL}'
 }

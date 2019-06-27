@@ -1,0 +1,85 @@
+#!/usr/bin/env groovy
+
+pipeline{
+    agent {
+        label 'slave01'
+    }
+
+    parameters {
+        string(name: 'BUILD_APPROVER_EMAIL', defaultValue: 'detorresrc@gmail.com', description: 'Build Approver Email')
+        string(name: 'BUILD_APPROVER_NAME', defaultValue: 'Rommel de Torres', description: 'Build Approver Name')
+    }
+    options {
+        timestamps()
+    }
+
+    stages {
+        stage('Download Artifact') {
+            steps {
+                withCredentials([string(credentialsId: 'ARTIFACTORY_USERNAME', variable: 'ARTIFACTORY_USERNAME'), string(credentialsId: 'ARTIFACTORY_PASSWORD', variable: 'ARTIFACTORY_PASSWORD')]) {
+                    sh "curl -O -u$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD \"https://jfrog-v2.ibm-kapamilya-devops.com/artifactory/group3/artifact.group3.${params.PARENT_BUILD_NUMBER}.tar.bz2\""
+                    sh "rm -Rf dist/"
+                    sh "tar -xjf artifact.group3.${params.PARENT_BUILD_NUMBER}.tar.bz2"
+                }
+            }
+        }
+        stage('Kubernetes Deployment - Production') {
+            steps {
+                sh '''
+                aws eks --region ap-southeast-1 update-kubeconfig --name group3
+                cd ${WORKSPACE}
+                cp dist/config/angular7-production-deployment-service.yaml /tmp/deployment.yaml
+                '''
+
+                sh "sed -i \"s/__VERSION__/production-${params.PARENT_BUILD_NUMBER}/\" /tmp/deployment.yaml"
+
+                sh '''
+                kubectl apply -f /tmp/deployment.yaml
+
+                /usr/bin/aws cloudfront create-invalidation --distribution-id ES8URS6XRCP4S --paths '/*'
+                '''
+            }
+        }
+    }
+    post {
+        always {
+            echo 'Always on run :D'
+        }
+        success {
+            echo 'Deployment to Production Success!'
+            buildStatusNotif("${currentBuild.currentResult}")
+            sendEmailNotif("${currentBuild.currentResult}")
+        }
+        unstable {
+            echo 'I am unstable :/'
+        }
+        failure {
+           echo 'Deployment to Production Failed!'
+           buildStatusNotif("${currentBuild.currentResult}")
+           sendEmailNotif("${currentBuild.currentResult}")
+        }
+        changed {
+            echo 'Things were different before...'
+        }
+    }
+}
+
+def buildStatusNotif(String status) {
+    def this_message = "${env.JOB_NAME} - BUILD " + status + ". More info at: '${env.BUILD_URL}'"
+    def colorCode = '#00FF00'
+
+    if(status == 'SUCCESS') {
+        colorCode = '#00FF00'
+    } else {
+        colorCode  = '#FF0000'
+    }
+
+    slackSend channel: 'jenkins', color: "${colorCode}", failOnError: true, message: "${this_message}", teamDomain: 'ibmkapamilyad-tfj8971', tokenCredentialId: 'GROUP3_SLACK_APIKEY'
+}
+
+def sendEmailNotif(String status) {
+    def this_body = "Hi ${BUILD_APPROVER_NAME}, <p>Job <strong>${env.JOB_NAME} | ${env.BUILD_NUMBER}</strong> was a "+status+".</p><p> More info at: ${env.BUILD_URL}</p>"
+    def this_subject = "[GROUP3 ANGULAR7] Production Deployment - " + status
+    
+    emailext mimeType: 'text/html', body: this_body, subject: this_subject, to: '${BUILD_APPROVER_EMAIL}'
+}
